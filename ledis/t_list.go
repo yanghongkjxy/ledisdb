@@ -11,6 +11,7 @@ import (
 	"github.com/siddontang/go/log"
 	"github.com/siddontang/go/num"
 	"github.com/siddontang/ledisdb/store"
+	"golang.org/x/net/context"
 )
 
 const (
@@ -120,12 +121,12 @@ func (db *DB) lpush(key []byte, whereSeq int32, args ...[]byte) (int64, error) {
 		return 0, err
 	}
 
-	var pushCnt int = len(args)
+	pushCnt := len(args)
 	if pushCnt == 0 {
 		return int64(size), nil
 	}
 
-	var seq int32 = headSeq
+	seq := headSeq
 	var delta int32 = -1
 	if whereSeq == listTailSeq {
 		seq = tailSeq
@@ -159,7 +160,7 @@ func (db *DB) lpush(key []byte, whereSeq int32, args ...[]byte) (int64, error) {
 	err = t.Commit()
 
 	if err == nil {
-		db.lSignalAsReady(key, pushCnt)
+		db.lSignalAsReady(key)
 	}
 
 	return int64(size) + int64(pushCnt), err
@@ -189,7 +190,7 @@ func (db *DB) lpop(key []byte, whereSeq int32) ([]byte, error) {
 
 	var value []byte
 
-	var seq int32 = headSeq
+	seq := headSeq
 	if whereSeq == listTailSeq {
 		seq = tailSeq
 	}
@@ -201,9 +202,9 @@ func (db *DB) lpop(key []byte, whereSeq int32) ([]byte, error) {
 	}
 
 	if whereSeq == listHeadSeq {
-		headSeq += 1
+		headSeq++
 	} else {
-		tailSeq -= 1
+		tailSeq--
 	}
 
 	t.Delete(itemKey)
@@ -233,25 +234,25 @@ func (db *DB) ltrim2(key []byte, startP, stopP int64) (err error) {
 	ek := db.lEncodeMetaKey(key)
 	if headSeq, _, llen, err = db.lGetMeta(nil, ek); err != nil {
 		return err
-	} else {
-		if start < 0 {
-			start = llen + start
-		}
-		if stop < 0 {
-			stop = llen + stop
-		}
-		if start >= llen || start > stop {
-			db.lDelete(t, key)
-			db.rmExpire(t, ListType, key)
-			return t.Commit()
-		}
+	}
 
-		if start < 0 {
-			start = 0
-		}
-		if stop >= llen {
-			stop = llen - 1
-		}
+	if start < 0 {
+		start = llen + start
+	}
+	if stop < 0 {
+		stop = llen + stop
+	}
+	if start >= llen || start > stop {
+		db.lDelete(t, key)
+		db.rmExpire(t, ListType, key)
+		return t.Commit()
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if stop >= llen {
+		stop = llen - 1
 	}
 
 	if start > 0 {
@@ -342,11 +343,14 @@ func (db *DB) lDelete(t *batch, key []byte) int64 {
 		return 0
 	}
 
-	var num int64 = 0
+	var num int64
 	startKey := db.lEncodeListKey(key, headSeq)
 	stopKey := db.lEncodeListKey(key, tailSeq)
 
-	rit := store.NewRangeIterator(it, &store.Range{startKey, stopKey, store.RangeClose})
+	rit := store.NewRangeIterator(it, &store.Range{
+		Min:  startKey,
+		Max:  stopKey,
+		Type: store.RangeClose})
 	for ; rit.Valid(); rit.Next() {
 		t.Delete(rit.RawKey())
 		num++
@@ -382,7 +386,7 @@ func (db *DB) lGetMeta(it *store.Iterator, ek []byte) (headSeq int32, tailSeq in
 func (db *DB) lSetMeta(ek []byte, headSeq int32, tailSeq int32) int32 {
 	t := db.listBatch
 
-	var size int32 = tailSeq - headSeq + 1
+	size := tailSeq - headSeq + 1
 	if size < 0 {
 		//	todo : log error + panic
 		log.Fatalf("invalid meta sequence range [%d, %d]", headSeq, tailSeq)
@@ -407,15 +411,17 @@ func (db *DB) lExpireAt(key []byte, when int64) (int64, error) {
 
 	if llen, err := db.LLen(key); err != nil || llen == 0 {
 		return 0, err
-	} else {
-		db.expireAt(t, ListType, key, when)
-		if err := t.Commit(); err != nil {
-			return 0, err
-		}
 	}
+
+	db.expireAt(t, ListType, key, when)
+	if err := t.Commit(); err != nil {
+		return 0, err
+	}
+
 	return 1, nil
 }
 
+// LIndex returns the value at index.
 func (db *DB) LIndex(key []byte, index int32) ([]byte, error) {
 	if err := checkKeySize(key); err != nil {
 		return nil, err
@@ -448,6 +454,7 @@ func (db *DB) LIndex(key []byte, index int32) ([]byte, error) {
 	return v, nil
 }
 
+// LLen gets the length of the list.
 func (db *DB) LLen(key []byte) (int64, error) {
 	if err := checkKeySize(key); err != nil {
 		return 0, err
@@ -458,25 +465,32 @@ func (db *DB) LLen(key []byte) (int64, error) {
 	return int64(size), err
 }
 
+// LPop pops the value.
 func (db *DB) LPop(key []byte) ([]byte, error) {
 	return db.lpop(key, listHeadSeq)
 }
 
+// LTrim trims the value from start to stop.
 func (db *DB) LTrim(key []byte, start, stop int64) error {
 	return db.ltrim2(key, start, stop)
 }
 
+// LTrimFront trims the value from top.
 func (db *DB) LTrimFront(key []byte, trimSize int32) (int32, error) {
 	return db.ltrim(key, trimSize, listHeadSeq)
 }
 
+// LTrimBack trims the value from back.
 func (db *DB) LTrimBack(key []byte, trimSize int32) (int32, error) {
 	return db.ltrim(key, trimSize, listTailSeq)
 }
 
+// LPush push the value to the list.
 func (db *DB) LPush(key []byte, args ...[]byte) (int64, error) {
 	return db.lpush(key, listHeadSeq, args...)
 }
+
+// LSet sets the value at index.
 func (db *DB) LSet(key []byte, index int32, value []byte) error {
 	if err := checkKeySize(key); err != nil {
 		return err
@@ -511,6 +525,7 @@ func (db *DB) LSet(key []byte, index int32, value []byte) error {
 	return err
 }
 
+// LRange gets the value of list at range.
 func (db *DB) LRange(key []byte, start int32, stop int32) ([][]byte, error) {
 	if err := checkKeySize(key); err != nil {
 		return nil, err
@@ -569,14 +584,17 @@ func (db *DB) LRange(key []byte, start int32, stop int32) ([][]byte, error) {
 	return v, nil
 }
 
+// RPop rpops the value.
 func (db *DB) RPop(key []byte) ([]byte, error) {
 	return db.lpop(key, listTailSeq)
 }
 
+// RPush rpushs the value .
 func (db *DB) RPush(key []byte, args ...[]byte) (int64, error) {
 	return db.lpush(key, listTailSeq, args...)
 }
 
+// LClear clears the list.
 func (db *DB) LClear(key []byte) (int64, error) {
 	if err := checkKeySize(key); err != nil {
 		return 0, err
@@ -593,6 +611,7 @@ func (db *DB) LClear(key []byte) (int64, error) {
 	return num, err
 }
 
+// LMclear clears multi lists.
 func (db *DB) LMclear(keys ...[]byte) (int64, error) {
 	t := db.listBatch
 	t.Lock()
@@ -619,6 +638,7 @@ func (db *DB) lFlush() (drop int64, err error) {
 	return db.flushType(t, ListType)
 }
 
+// LExpire expires the list.
 func (db *DB) LExpire(key []byte, duration int64) (int64, error) {
 	if duration <= 0 {
 		return 0, errExpireValue
@@ -627,6 +647,7 @@ func (db *DB) LExpire(key []byte, duration int64) (int64, error) {
 	return db.lExpireAt(key, time.Now().Unix()+duration)
 }
 
+// LExpireAt expires the list at when.
 func (db *DB) LExpireAt(key []byte, when int64) (int64, error) {
 	if when <= time.Now().Unix() {
 		return 0, errExpireValue
@@ -635,6 +656,7 @@ func (db *DB) LExpireAt(key []byte, when int64) (int64, error) {
 	return db.lExpireAt(key, when)
 }
 
+// LTTL gets the TTL of list.
 func (db *DB) LTTL(key []byte) (int64, error) {
 	if err := checkKeySize(key); err != nil {
 		return -1, err
@@ -643,6 +665,7 @@ func (db *DB) LTTL(key []byte) (int64, error) {
 	return db.ttl(ListType, key)
 }
 
+// LPersist removes the TTL of list.
 func (db *DB) LPersist(key []byte) (int64, error) {
 	if err := checkKeySize(key); err != nil {
 		return 0, err
@@ -671,14 +694,17 @@ func (db *DB) lEncodeMaxKey() []byte {
 	return ek
 }
 
+// BLPop pops the list with block way.
 func (db *DB) BLPop(keys [][]byte, timeout time.Duration) ([]interface{}, error) {
 	return db.lblockPop(keys, listHeadSeq, timeout)
 }
 
+// BRPop bpops the list with block way.
 func (db *DB) BRPop(keys [][]byte, timeout time.Duration) ([]interface{}, error) {
 	return db.lblockPop(keys, listTailSeq, timeout)
 }
 
+// LKeyExists check list existed or not.
 func (db *DB) LKeyExists(key []byte) (int64, error) {
 	if err := checkKeySize(key); err != nil {
 		return 0, err
@@ -692,71 +718,42 @@ func (db *DB) LKeyExists(key []byte) (int64, error) {
 }
 
 func (db *DB) lblockPop(keys [][]byte, whereSeq int32, timeout time.Duration) ([]interface{}, error) {
-	ch := make(chan []byte)
-
-	bkeys := [][]byte{}
-	for _, key := range keys {
-		v, err := db.lpop(key, whereSeq)
-		if err != nil {
-			return nil, err
-		} else if v != nil {
-			return []interface{}{key, v}, nil
-		} else {
-			db.lbkeys.wait(key, ch)
-			bkeys = append(bkeys, key)
-		}
-	}
-	if len(bkeys) == 0 {
-		return nil, nil
-	}
-
-	defer func() {
-		for _, key := range bkeys {
-			db.lbkeys.unwait(key, ch)
-		}
-	}()
-
-	deadT := time.Now().Add(timeout)
-
 	for {
-		if timeout == 0 {
-			key := <-ch
-			if v, err := db.lpop(key, whereSeq); err != nil {
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if timeout > 0 {
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		} else {
+			ctx, cancel = context.WithCancel(context.Background())
+		}
+
+		for _, key := range keys {
+			v, err := db.lbkeys.popOrWait(db, key, whereSeq, cancel)
+
+			if err != nil {
+				cancel()
 				return nil, err
-			} else if v == nil {
-				continue
-			} else {
+			} else if v != nil {
+				cancel()
 				return []interface{}{key, v}, nil
 			}
-		} else {
-			d := deadT.Sub(time.Now())
-			if d < 0 {
-				return nil, nil
-			}
-
-			select {
-			case key := <-ch:
-				if v, err := db.lpop(key, whereSeq); err != nil {
-					return nil, err
-				} else if v == nil {
-					db.lbkeys.wait(key, ch)
-					continue
-				} else {
-					return []interface{}{key, v}, nil
-				}
-			case <-time.After(d):
-				return nil, nil
-			}
 		}
 
+		//blocking wait
+		<-ctx.Done()
+		cancel()
+
+		//if ctx.Err() is a deadline exceeded (timeout) we return
+		//otherwise we try to pop one of the keys again.
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, nil
+		}
 	}
 }
 
-func (db *DB) lSignalAsReady(key []byte, num int) {
-	db.lbkeys.signal(key, num)
+func (db *DB) lSignalAsReady(key []byte) {
+	db.lbkeys.signal(key)
 }
-
-type lbKeyCh chan<- []byte
 
 type lBlockKeys struct {
 	sync.Mutex
@@ -771,40 +768,32 @@ func newLBlockKeys() *lBlockKeys {
 	return l
 }
 
-func (l *lBlockKeys) signal(key []byte, num int) {
+func (l *lBlockKeys) signal(key []byte) {
 	l.Lock()
 	defer l.Unlock()
 
 	s := hack.String(key)
-	chs, ok := l.keys[s]
+	fns, ok := l.keys[s]
 	if !ok {
 		return
 	}
-
-	var n *list.Element
-
-	i := 0
-	for e := chs.Front(); e != nil && i < num; e = n {
-		ch := e.Value.(lbKeyCh)
-		n = e.Next()
-		select {
-		case ch <- key:
-			chs.Remove(e)
-			i++
-		default:
-			//waiter unwait
-			chs.Remove(e)
-		}
+	for e := fns.Front(); e != nil; e = e.Next() {
+		fn := e.Value.(context.CancelFunc)
+		fn()
 	}
 
-	if chs.Len() == 0 {
-		delete(l.keys, s)
-	}
+	delete(l.keys, s)
 }
 
-func (l *lBlockKeys) wait(key []byte, ch lbKeyCh) {
+func (l *lBlockKeys) popOrWait(db *DB, key []byte, whereSeq int32, fn context.CancelFunc) ([]interface{}, error) {
+	v, err := db.lpop(key, whereSeq)
+	if err != nil {
+		return nil, err
+	} else if v != nil {
+		return []interface{}{key, v}, nil
+	}
+
 	l.Lock()
-	defer l.Unlock()
 
 	s := hack.String(key)
 	chs, ok := l.keys[s]
@@ -813,29 +802,7 @@ func (l *lBlockKeys) wait(key []byte, ch lbKeyCh) {
 		l.keys[s] = chs
 	}
 
-	chs.PushBack(ch)
-}
-
-func (l *lBlockKeys) unwait(key []byte, ch lbKeyCh) {
-	l.Lock()
-	defer l.Unlock()
-
-	s := hack.String(key)
-	chs, ok := l.keys[s]
-	if !ok {
-		return
-	} else {
-		var n *list.Element
-		for e := chs.Front(); e != nil; e = n {
-			c := e.Value.(lbKeyCh)
-			n = e.Next()
-			if c == ch {
-				chs.Remove(e)
-			}
-		}
-
-		if chs.Len() == 0 {
-			delete(l.keys, s)
-		}
-	}
+	chs.PushBack(fn)
+	l.Unlock()
+	return nil, nil
 }

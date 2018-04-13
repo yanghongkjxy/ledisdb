@@ -128,6 +128,8 @@ func (db *DB) initOptions(cfg *config.LevelDBConfig) {
 
 	opts.SetMaxOpenFiles(cfg.MaxOpenFiles)
 
+	opts.SetMaxFileSize(cfg.MaxFileSize)
+
 	db.opts = opts
 
 	db.readOpts = NewReadOptions()
@@ -296,10 +298,6 @@ func (db *DB) delete(wo *WriteOptions, key []byte) error {
 		return saveError(errStr)
 	}
 	return nil
-}
-
-func (db *DB) Begin() (driver.Tx, error) {
-	return nil, driver.ErrTxSupport
 }
 
 func (db *DB) Compact() error {

@@ -297,6 +297,105 @@ func TestPop(t *testing.T) {
 
 }
 
+func TestRPopLPush(t *testing.T) {
+	c := getTestConn()
+	defer c.Close()
+
+	src := []byte("sr")
+	des := []byte("de")
+
+	c.Do("lclear", src)
+	c.Do("lclear", des)
+
+	if _, err := goredis.Int(c.Do("rpoplpush", src, des)); err != goredis.ErrNil {
+		t.Fatal(err)
+	}
+
+	if v, err := goredis.Int(c.Do("llen", des)); err != nil {
+		t.Fatal(err)
+	} else if v != 0 {
+		t.Fatal(v)
+	}
+
+	if n, err := goredis.Int(c.Do("rpush", src, 1, 2, 3, 4, 5, 6)); err != nil {
+		t.Fatal(err)
+	} else if n != 6 {
+		t.Fatal(n)
+	}
+
+	if v, err := goredis.Int(c.Do("rpoplpush", src, src)); err != nil {
+		t.Fatal(err)
+	} else if v != 6 {
+		t.Fatal(v)
+	}
+
+	if v, err := goredis.Int(c.Do("llen", src)); err != nil {
+		t.Fatal(err)
+	} else if v != 6 {
+		t.Fatal(v)
+	}
+
+	if v, err := goredis.Int(c.Do("rpoplpush", src, des)); err != nil {
+		t.Fatal(err)
+	} else if v != 5 {
+		t.Fatal(v)
+	}
+
+	if v, err := goredis.Int(c.Do("llen", src)); err != nil {
+		t.Fatal(err)
+	} else if v != 5 {
+		t.Fatal(v)
+	}
+
+	if v, err := goredis.Int(c.Do("llen", des)); err != nil {
+		t.Fatal(err)
+	} else if v != 1 {
+		t.Fatal(v)
+	}
+
+	if v, err := goredis.Int(c.Do("lpop", des)); err != nil {
+		t.Fatal(err)
+	} else if v != 5 {
+		t.Fatal(v)
+	}
+
+	if v, err := goredis.Int(c.Do("lpop", src)); err != nil {
+		t.Fatal(err)
+	} else if v != 6 {
+		t.Fatal(v)
+	}
+}
+
+func TestRPopLPushSingleElement(t *testing.T) {
+	c := getTestConn()
+	defer c.Close()
+
+	src := []byte("sr")
+
+	c.Do("lclear", src)
+	if n, err := goredis.Int(c.Do("rpush", src, 1)); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal(n)
+	}
+	ttl := 300
+	if _, err := c.Do("lexpire", src, ttl); err != nil {
+		t.Fatal(err)
+	}
+
+	if v, err := goredis.Int(c.Do("rpoplpush", src, src)); err != nil {
+		t.Fatal(err)
+	} else if v != 1 {
+		t.Fatal(v)
+	}
+
+	if tl, err := goredis.Int(c.Do("lttl", src)); err != nil {
+		t.Fatal(err)
+	} else if tl == -1 || tl > ttl {
+		t.Fatal(tl)
+	}
+}
+
 func TestTrim(t *testing.T) {
 	c := getTestConn()
 	defer c.Close()
@@ -368,62 +467,62 @@ func TestListErrorParams(t *testing.T) {
 	defer c.Close()
 
 	if _, err := c.Do("lpush", "test_lpush"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("rpush", "test_rpush"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lpop", "test_lpop", "a"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("rpop", "test_rpop", "a"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("llen", "test_llen", "a"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lindex", "test_lindex"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lrange", "test_lrange"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lclear"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lmclear"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lexpire"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lexpireat"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lttl"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("lpersist"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("ltrim_front", "test_ltrimfront", "-1"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 
 	if _, err := c.Do("ltrim_back", "test_ltrimback", "a"); err == nil {
-		t.Fatal("invalid err of %v", err)
+		t.Fatalf("invalid err of %v", err)
 	}
 }

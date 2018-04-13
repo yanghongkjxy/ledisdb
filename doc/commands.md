@@ -48,6 +48,7 @@ Most of the Ledisdb's commands are the same as Redis's, you can see the redis co
   - [HLEN key](#hlen-key)
   - [HMGET key field [field ...]](#hmget-key-field-field-)
   - [HMSET key field value [field value ...]](#hmset-key-field-value-field-value-)
+  - [HSCAN key cursor [MATCH match] [COUNT count] [ASC|DESC]](#hscan-key-cursor-match-match-count-count-asc|desc)
   - [HSET key field value](#hset-key-field-value)
   - [HVALS key](#hvals-key)
   - [HCLEAR key](#hclear-key)
@@ -61,12 +62,14 @@ Most of the Ledisdb's commands are the same as Redis's, you can see the redis co
 - [List](#list)
   - [BLPOP key [key ...] timeout](#blpop-key-key--timeout)
   - [BRPOP key [key ...] timeout](#brpop-key-key--timeout)
+  - [BRPOPLPUSH source destination timeout](#brpoplpush-source-destination-timeout)
   - [LINDEX key index](#lindex-key-index)
   - [LLEN key](#llen-key)
   - [LPOP key](#lpop-key)
   - [LRANGE key start stop](#lrange-key-start-stop)
   - [LPUSH key value [value ...]](#lpush-key-value-value-)
   - [RPOP key](#rpop-key)
+  - [RPOPLPUSH source destination](#rpoplpush-source-destination)
   - [RPUSH key value [value ...]](#rpush-key-value-value-)
   - [LCLEAR key](#lclear-key)
   - [LMCLEAR key [key ...]](#lmclear-key-key-)
@@ -86,6 +89,7 @@ Most of the Ledisdb's commands are the same as Redis's, you can see the redis co
   - [SISMEMBER  key member](#sismember--key-member)
   - [SMEMBERS key](#smembers-key)
   - [SREM  key member [member ...]](#srem--key-member-member-)
+  - [SSCAN key cursor [MATCH match] [COUNT count] [ASC|DESC]](#sscan-key-cursor-match-match-count-count-asc|desc)
   - [SUNION key [key ...]](#sunion-key-key-)
   - [SUNIONSTORE destination key [key]](#sunionstore-destination-key-key)
   - [SCLEAR key](#sclear-key)
@@ -110,6 +114,7 @@ Most of the Ledisdb's commands are the same as Redis's, you can see the redis co
   - [ZREVRANGE key start stop [WITHSCORES]](#zrevrange-key-start-stop-withscores)
   - [ZREVRANGEBYSCORE  key max min [WITHSCORES] [LIMIT offset count]](#zrevrangebyscore--key-max-min-withscores-limit-offset-count)
   - [ZREVRANK key member](#zrevrank-key-member)
+  - [ZSCAN key cursor [MATCH match] [COUNT count] [ASC|DESC]](#zscan-key-cursor-match-match-count-count-asc|desc)
   - [ZSCORE key member](#zscore-key-member)
   - [ZCLEAR key](#zclear-key)
   - [ZMCLEAR key [key ...]](#zmclear-key-key-)
@@ -728,6 +733,12 @@ ledis> HMGET myhash field1 field2
 2) "world"
 ```
 
+### HSCAN key cursor [MATCH match] [COUNT count] [ASC|DESC]
+
+Same like XHSCAN, but made redis compatible.
+Meaning that the initial cursor has to be `"0"`,
+and the final cursor will be `"0"` as well.
+
 ### HSET key field value
 
 Sets field in the hash stored at key to value. If key does not exists, a new hash key is created.
@@ -950,6 +961,12 @@ ledis> BLPOP list1 list2 0
 
 See [BLPOP key [key ...] timeout](#blpop-key-key--timeout) for more information.
 
+### BRPOPLPUSH source destination timeout
+BRPOPLPUSH is the blocking variant of [RPOPLPUSH](#rpoplpush-source-destination).
+When source contains elements, this command behaves exactly like RPOPLPUSH.
+Redis will block the connection until another client pushes to it or until timeout is reached.
+A timeout of zero can be used to block indefinitely.
+
 ### LINDEX key index
 Returns the element at index index in the list stored at key. The index is zero-based, so 0 means the first element, 1 the second element and so on. Negative indices can be used to designate elements starting at the tail of the list. Here, `-1` means the last element, `-2` means the penultimate and so forth.
 When the value at key is not a list, an error is returned.
@@ -1080,6 +1097,14 @@ ledis> LRANGE a 0 3
 1) "1"
 2) "2"
 ```
+
+### RPOPLPUSH source destination
+Atomically returns and removes the last element (tail) of the list stored at source, and pushes the element at the first element (head) of the list stored at destination.
+
+For example: consider source holding the list a,b,c, and destination holding the list x,y,z. Executing RPOPLPUSH results in source holding a,b and destination holding c,x,y,z.
+
+If source does not exist, the value nil is returned and no operation is performed.
+If source and destination are the same, the operation is equivalent to removing the last element from the list and pushing it as first element of the list, so it can be considered as a list rotation command.
 
 ### RPUSH key value [value ...]
 Insert all the specified values at the tail of the list stored at key. If key does not exist, it is created as empty list before performing the push operation. When key holds a value that is not a list, an error is returned.
@@ -1472,6 +1497,12 @@ ledis> SMEMBERS myset
 1) "three"
 2) "two"
 ```
+
+### SSCAN key cursor [MATCH match] [COUNT count] [ASC|DESC]
+
+Same like XSSCAN, but made redis compatible.
+Meaning that the initial cursor has to be `"0"`,
+and the final cursor will be `"0"` as well.
 
 ### SUNION key [key ...]
 
@@ -2073,6 +2104,12 @@ ledis> ZSCORE myzset 'one'
 1
 ```
 
+### ZSCAN key cursor [MATCH match] [COUNT count] [ASC|DESC]
+
+Same like XZSCAN, but made redis compatible.
+Meaning that the initial cursor has to be `"0"`,
+and the final cursor will be `"0"` as well.
+
 ### ZCLEAR key
 Delete the specified  key
 
@@ -2614,13 +2651,18 @@ LedisDB's script is refer to Redis, you can see more [http://redis.io/commands/e
 
 You must notice that executing lua will block any other write operations.
 
-Use global object name "ledis" instead of "redis" to call commands in the Lua script:
+Both "ledis" and "redis" can be used call commands in the Lua script:
 
 - ledis.call()
+- redis.call()
 - ledis.pcall()
+- redis.pcall()
 - ledis.sha1hex()
+- redis.sha1hex()
 - ledis.status_reply()
+- redis.status_reply()
 - ledis.error_reply()
+- redis.error_reply()
  
 EVALSHA command returns error message without "NOSCRIPT " prefix, so redigo users should preload script explicitly.
 

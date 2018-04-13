@@ -7,7 +7,9 @@ import (
 	"io/ioutil"
 	"sync"
 
-	"github.com/BurntSushi/toml"
+	"fmt"
+
+	"github.com/pelletier/go-toml"
 	"github.com/siddontang/go/ioutil2"
 )
 
@@ -33,6 +35,7 @@ type LevelDBConfig struct {
 	WriteBufferSize int  `toml:"write_buffer_size"`
 	CacheSize       int  `toml:"cache_size"`
 	MaxOpenFiles    int  `toml:"max_open_files"`
+	MaxFileSize     int  `toml:"max_file_size"`
 }
 
 type RocksDBConfig struct {
@@ -52,16 +55,15 @@ type RocksDBConfig struct {
 	MaxBytesForLevelBase           int  `toml:"max_bytes_for_level_base"`
 	MaxBytesForLevelMultiplier     int  `toml:"max_bytes_for_level_multiplier"`
 	DisableAutoCompactions         bool `toml:"disable_auto_compactions"`
-	DisableDataSync                bool `toml:"disable_data_sync"`
 	UseFsync                       bool `toml:"use_fsync"`
 	MaxBackgroundCompactions       int  `toml:"max_background_compactions"`
 	MaxBackgroundFlushes           int  `toml:"max_background_flushes"`
-	AllowOsBuffer                  bool `toml:"allow_os_buffer"`
 	EnableStatistics               bool `toml:"enable_statistics"`
 	StatsDumpPeriodSec             int  `toml:"stats_dump_period_sec"`
 	BackgroundThreads              int  `toml:"background_theads"`
 	HighPriorityBackgroundThreads  int  `toml:"high_priority_background_threads"`
 	DisableWAL                     bool `toml:"disable_wal"`
+	MaxManifestFileSize            int  `toml:"max_manifest_file_size"`
 }
 
 type LMDBConfig struct {
@@ -81,6 +83,7 @@ type ReplicationConfig struct {
 	SyncLog          int    `toml:"sync_log"`
 	Compression      bool   `toml:"compression"`
 	UseMmap          bool   `toml:"use_mmap"`
+	MasterPassword   string `toml:"master_password"`
 }
 
 type SnapshotConfig struct {
@@ -88,13 +91,25 @@ type SnapshotConfig struct {
 	MaxNum int    `toml:"max_num"`
 }
 
+type TLS struct {
+	Enabled     bool   `toml:"enabled"`
+	Certificate string `toml:"certificate"`
+	Key         string `toml:"key"`
+}
+
+type AuthMethod func(c *Config, password string) bool
+
 type Config struct {
 	m sync.RWMutex `toml:"-"`
 
 	AuthPassword string `toml:"auth_password"`
 
+	//AuthMethod custom authentication method
+	AuthMethod AuthMethod `toml:"-"`
+
 	FileName string `toml:"-"`
 
+	// Addr can be empty to assign a local address dynamically
 	Addr string `toml:"addr"`
 
 	AddrUnixSocketPerm string `toml:"addr_unixsocketperm"`
@@ -130,6 +145,9 @@ type Config struct {
 	ConnKeepaliveInterval int `toml:"conn_keepalive_interval"`
 
 	TTLCheckInterval int `toml:"ttl_check_interval"`
+
+	//tls config
+	TLS TLS `toml:"tls"`
 }
 
 func NewConfigWithFile(fileName string) (*Config, error) {
@@ -138,20 +156,20 @@ func NewConfigWithFile(fileName string) (*Config, error) {
 		return nil, err
 	}
 
-	if cfg, err := NewConfigWithData(data); err != nil {
+	cfg, err := NewConfigWithData(data)
+	if err != nil {
 		return nil, err
-	} else {
-		cfg.FileName = fileName
-		return cfg, nil
 	}
+
+	cfg.FileName = fileName
+	return cfg, nil
 }
 
 func NewConfigWithData(data []byte) (*Config, error) {
 	cfg := NewConfigDefault()
 
-	_, err := toml.Decode(string(data), cfg)
-	if err != nil {
-		return nil, err
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("newConfigwithData: unmarashal: %s", err)
 	}
 
 	cfg.adjust()
@@ -192,11 +210,9 @@ func NewConfigDefault() *Config {
 	cfg.Replication.UseMmap = true
 	cfg.Snapshot.MaxNum = 1
 
-	cfg.RocksDB.AllowOsBuffer = true
 	cfg.RocksDB.EnableStatistics = false
 	cfg.RocksDB.UseFsync = false
 	cfg.RocksDB.DisableAutoCompactions = false
-	cfg.RocksDB.AllowOsBuffer = true
 	cfg.RocksDB.DisableWAL = false
 
 	cfg.adjust()
@@ -207,9 +223,9 @@ func NewConfigDefault() *Config {
 func getDefault(d int, s int) int {
 	if s <= 0 {
 		return d
-	} else {
-		return s
 	}
+
+	return s
 }
 
 func (cfg *Config) adjust() {
@@ -230,6 +246,7 @@ func (cfg *LevelDBConfig) adjust() {
 	cfg.BlockSize = getDefault(4*KB, cfg.BlockSize)
 	cfg.WriteBufferSize = getDefault(4*MB, cfg.WriteBufferSize)
 	cfg.MaxOpenFiles = getDefault(1024, cfg.MaxOpenFiles)
+	cfg.MaxFileSize = getDefault(32*MB, cfg.MaxFileSize)
 }
 
 func (cfg *RocksDBConfig) adjust() {
@@ -252,12 +269,19 @@ func (cfg *RocksDBConfig) adjust() {
 	cfg.StatsDumpPeriodSec = getDefault(3600, cfg.StatsDumpPeriodSec)
 	cfg.BackgroundThreads = getDefault(2, cfg.BackgroundThreads)
 	cfg.HighPriorityBackgroundThreads = getDefault(1, cfg.HighPriorityBackgroundThreads)
+	cfg.MaxManifestFileSize = getDefault(20*MB, cfg.MaxManifestFileSize)
 }
 
 func (cfg *Config) Dump(w io.Writer) error {
-	e := toml.NewEncoder(w)
-	e.Indent = ""
-	return e.Encode(cfg)
+	data, err := toml.Marshal(*cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (cfg *Config) DumpFile(fileName string) error {

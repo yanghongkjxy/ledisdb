@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"crypto/tls"
 	"github.com/siddontang/goredis"
 	"github.com/siddontang/ledisdb/config"
 	"github.com/siddontang/ledisdb/ledis"
@@ -55,9 +57,30 @@ type App struct {
 func netType(s string) string {
 	if strings.Contains(s, "/") {
 		return "unix"
-	} else {
-		return "tcp"
 	}
+
+	return "tcp"
+}
+
+func tlsConfig(c *config.TLS) (*tls.Config, error) {
+	crt, err := tls.LoadX509KeyPair(c.Certificate, c.Key)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{
+			crt,
+		},
+	}, nil
+}
+
+func listen(netType, laddr string, tlsCfg *tls.Config) (net.Listener, error) {
+	if tlsCfg != nil {
+		return tls.Listen(netType, laddr, tlsCfg)
+	}
+
+	return net.Listen(netType, laddr)
 }
 
 func NewApp(cfg *config.Config) (*App, error) {
@@ -88,24 +111,41 @@ func NewApp(cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 
-	addrNetType := netType(cfg.Addr)
-
-	if app.listener, err = net.Listen(addrNetType, cfg.Addr); err != nil {
-		return nil, err
-	}
-
-	if addrNetType == "unix" && len(cfg.AddrUnixSocketPerm) > 0 {
-		var perm int64
-		if perm, err = strconv.ParseInt(cfg.AddrUnixSocketPerm, 8, 32); err != nil {
+	var tlsCfg *tls.Config
+	if cfg.TLS.Enabled {
+		tlsCfg, err = tlsConfig(&cfg.TLS)
+		if err != nil {
 			return nil, err
 		}
-		if err = os.Chmod(cfg.Addr, os.FileMode(perm)); err != nil {
+	}
+
+	if cfg.Addr != "" {
+		addrNetType := netType(cfg.Addr)
+
+		if app.listener, err = listen(addrNetType, cfg.Addr, tlsCfg); err != nil {
 			return nil, err
+		}
+
+		if addrNetType == "unix" && len(cfg.AddrUnixSocketPerm) > 0 {
+			var perm int64
+			if perm, err = strconv.ParseInt(cfg.AddrUnixSocketPerm, 8, 32); err != nil {
+				return nil, err
+			}
+			if err = os.Chmod(cfg.Addr, os.FileMode(perm)); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		app.listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			if app.listener, err = net.Listen("tcp6", "[::1]:0"); err != nil {
+				return nil, fmt.Errorf("app: failed to listen on a port: %v", err)
+			}
 		}
 	}
 
 	if len(cfg.HttpAddr) > 0 {
-		if app.httpListener, err = net.Listen(netType(cfg.HttpAddr), cfg.HttpAddr); err != nil {
+		if app.httpListener, err = listen(netType(cfg.HttpAddr), cfg.HttpAddr, tlsCfg); err != nil {
 			return nil, err
 		}
 	}
@@ -226,4 +266,8 @@ func (app *App) httpServe() {
 
 func (app *App) Ledis() *ledis.Ledis {
 	return app.ldb
+}
+
+func (app *App) Address() string {
+	return app.listener.Addr().String()
 }

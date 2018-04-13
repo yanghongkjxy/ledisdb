@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"bytes"
 	"github.com/siddontang/go/hack"
 	"github.com/siddontang/ledisdb/ledis"
 )
@@ -279,6 +280,110 @@ func lParseBPopArgs(c *client) (keys [][]byte, timeout time.Duration, err error)
 	return
 }
 
+func brpoplpushCommand(c *client) error {
+	source, dest, timeout, err := lParseBRPoplpushArgs(c)
+	if err != nil {
+		return err
+	}
+
+	var ttl int64 = -1
+	if bytes.Compare(source, dest) == 0 {
+		var err error
+		ttl, err = c.db.LTTL(source)
+		if err != nil {
+			return err
+		}
+	}
+
+	ay, err := c.db.BRPop([][]byte{source}, timeout)
+	if err != nil {
+		return err
+	}
+
+	if ay == nil {
+		c.resp.writeBulk(nil)
+		return nil
+	}
+
+	data, ok := ay[1].([]byte)
+	if !ok {
+		//not sure if this even possible
+		return ErrValue
+	}
+	if _, err := c.db.LPush(dest, data); err != nil {
+		c.db.RPush(source, data) //revert pop
+		return err
+	}
+
+	//reset ttl
+	if ttl != -1 {
+		c.db.LExpire(source, ttl)
+	}
+
+	c.resp.writeBulk(data)
+	return nil
+
+}
+
+func lParseBRPoplpushArgs(c *client) (source []byte, dest []byte, timeout time.Duration, err error) {
+	args := c.args
+	if len(args) != 3 {
+		err = ErrCmdParams
+		return
+	}
+
+	source = args[0]
+	dest = args[1]
+
+	var t float64
+	if t, err = strconv.ParseFloat(hack.String(args[len(args)-1]), 64); err != nil {
+		return
+	}
+
+	timeout = time.Duration(t * float64(time.Second))
+	return
+}
+
+func rpoplpushCommand(c *client) error {
+	args := c.args
+	if len(args) != 2 {
+		return ErrCmdParams
+	}
+	source, dest := args[0], args[1]
+
+	var ttl int64 = -1
+	if bytes.Compare(source, dest) == 0 {
+		var err error
+		ttl, err = c.db.LTTL(source)
+		if err != nil {
+			return err
+		}
+	}
+
+	data, err := c.db.RPop(source)
+	if err != nil {
+		return err
+	}
+
+	if data == nil {
+		c.resp.writeBulk(nil)
+		return nil
+	}
+
+	if _, err := c.db.LPush(dest, data); err != nil {
+		c.db.RPush(source, data) //revert pop
+		return err
+	}
+
+	//reset ttl
+	if ttl != -1 {
+		c.db.LExpire(source, ttl)
+	}
+
+	c.resp.writeBulk(data)
+	return nil
+}
+
 func lkeyexistsCommand(c *client) error {
 	args := c.args
 	if len(args) != 1 {
@@ -376,6 +481,8 @@ func init() {
 	register("lpush", lpushCommand)
 	register("rpop", rpopCommand)
 	register("rpush", rpushCommand)
+	register("brpoplpush", brpoplpushCommand)
+	register("rpoplpush", rpoplpushCommand)
 
 	//ledisdb special command
 
